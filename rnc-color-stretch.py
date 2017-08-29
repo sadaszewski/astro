@@ -1,3 +1,7 @@
+#
+# Copyright (C) Stanislaw Adaszewski, 2017
+#
+
 from argparse import ArgumentParser
 from PIL import Image
 import numpy as np
