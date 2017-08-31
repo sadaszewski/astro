@@ -1,6 +1,10 @@
 #
 # Copyright (C) Stanislaw Adaszewski, 2017
 #
+# Based on rnc-color-stretch (for Davinci) by
+# Roger N. Clark:
+# http://www.clarkvision.com/articles/astrophotography-rnc-color-stretch/
+#
 
 from argparse import ArgumentParser
 from PIL import Image
@@ -25,11 +29,11 @@ def create_parser():
 	# parser.add_argument('--zeroskyred', type=float, default=4096.0)
 	# parser.add_argument('--zeroskygreen', type=float, default=4096.0)
 	# parser.add_argument('--zeroskyblue', type=float, default=4096.0)
-	parser.add_argument('--scurve', action='store_true')
-	parser.add_argument('--setmin', action='store_true')
-	parser.add_argument('--setminr', type=float, default=0.0)
-	parser.add_argument('--setming', type=float, default=0.0)
-	parser.add_argument('--setminb', type=float, default=0.0)
+	parser.add_argument('--scurve', type=int, default=0)
+	parser.add_argument('--setmin', type=float, nargs=3)
+	# parser.add_argument('--setminr', type=float, default=0.0)
+	# parser.add_argument('--setming', type=float, default=0.0)
+	# parser.add_argument('--setminb', type=float, default=0.0)
 	return parser
 	
 	
@@ -133,6 +137,60 @@ def root_stretch(im, args):
 		c = subtract_sky(c, ispassmax, args)
 
 
+# sc = (xfactor / (1 + exp(-1 * ((float(c)/65535.0 - xoffset) * xfactor) ))-(1- xoffset))/scurvemax
+def s_curve(im, nscurve):
+	xfactors = [5.0, 3.0, 5.0, 3.0, 5.0]
+	xoffsets = [0.42, 0.22, 0.42, 0.22, 0.42]
+	
+	c = np.array(im).astype(np.float64)
+	
+	for i in range(nscurve):
+		if i >= len(xfactors):
+			xfactor = xfactors[-1]
+			xoffset = xoffsets[-1]
+		else:
+			xfactor = xfactors[i]
+			xoffset = xoffsets[i]
+	
+		scurvemin =  (xfactor / (1.0 + exp(-1.0 * ((0.0/65535.0 - xoffset) * xfactor) ))-(1.0- xoffset))
+		scurvemax =  (xfactor / (1.0 + exp(-1.0 * ((65535.0/65535.0 - xoffset) * xfactor) ))-(1.0- xoffset))
+		scurveminsc = scurvemin / scurvemax
+		
+		xo = (1.0 - xoffset)
+		sc = c / 65535.0
+		sc = sc - xoffset      # now have (float(c)/65535.0 - xoffset)
+		sc = sc * xfactor
+		sc = sc * (-1.0)
+		sc = np.exp(sc)           # now have exp(-1.0 * ((float(c)/65535.0 - xoffset) * xfactor) )
+	
+		#sc = (xfactor / (1.0 + sc )-(1.0- xoffset))/scurvemax
+
+		sc = 1.0 + sc          # now have (1.0 + exp(-1.0 * ((float(c)/65535.0 - xoffset) * xfactor) ))
+		sc = xfactor / sc
+		sc = (sc-xo)
+		sc = sc / scurvemax
+
+		# image range is now -0.00829863 to 1.0  when i=1
+
+		#cbefore = c 
+		# c = 65535.0 * (sc - scurveminsc) / (1.0 - scurveminsc)
+		sc = sc - scurveminsc
+		sc = 65535.0 * sc
+		c = sc / (1.0 - scurveminsc)
+		
+	return c
+	
+	
+def set_min(im, minval):
+	c = np.array(im)
+	zx = 0.2  # keep some of the low level, which is noise, so it looks more natural.
+	
+	for i in range(3):
+		(a, b) = np.where(c[:, :, i] < minval[i])
+		c[a, b, np.ones(len(a), 1) * i] = minval[i] + zx * c[a, b, np.ones(len(a), 1) * i]
+
+	return c
+
 	
 def main():
 	parser = create_parser()
@@ -172,6 +230,11 @@ def main():
 	Image.fromarray(c[:,:,2]).save('find_sky_level_b.tif')
 	
 	c = root_stretch(c, args)
+	c = s_curve(c, args.scurve)
+	if args.scurve > 0:
+		c = subtract_sky(im, 2, args)
+	if args.setmin is not None:
+		c = set_min(c, args.setmin)
 	
 	
 	
