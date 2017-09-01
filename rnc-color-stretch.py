@@ -23,7 +23,7 @@ def create_parser():
 	parser.add_argument('--tonecurve', action='store_true')
 	parser.add_argument('--cumstretch', action='store_true')
 	parser.add_argument('--skylevelfactor', type=float, default=0.06)
-	parser.add_argument('--rgbskylevel', type=float, default=1024.0)
+	# parser.add_argument('--rgbskylevel', type=float, default=1024.0)
 	parser.add_argument('--rgbskylevelrs', type=float, default=4096.0)
 	parser.add_argument('--zerosky', type=float, default=[4096.0, 4096.0, 4096.0], nargs=3)
 	# parser.add_argument('--zeroskyred', type=float, default=4096.0)
@@ -117,7 +117,7 @@ def root_stretch(im, args):
 		
 		b = c + 1.0
 		b = b / 65536.0
-		b = 65535.0 * b ^ x
+		b = 65535.0 * (b ** x)
 		
 		bmin = np.min(b)
 		bminz = bmin - 4096.0
@@ -191,6 +191,100 @@ def set_min(im, minval):
 
 	return c
 
+
+def color_correct(orig_im, im, args):
+	af = np.array(orig_im).astype(np.float64)
+	c = np.array(im).astype(np.float64)
+	
+	afs = af - args.zerosky
+	afs[afs < 10] = 10
+	
+	
+	grratio = (afs[:,:,1] / afs[:,:,0]) / (c[:,:,1] / c[:,:,0])  # green / red ratio
+	brratio = (afs[:,:,2] / afs[:,:,0]) / (c[:,:,2] / c[:,:,0])  # blue  / red ratio
+
+	rgratio = (afs[:,:,0] / afs[:,:,1]) / (c[:,:,0] / c[:,:,1])  # red   / green ratio
+	bgratio = (afs[:,:,2] / afs[:,:,1]) / (c[:,:,2] / c[:,:,1])  # blue  / green ratio
+
+	gbratio = (afs[:,:,1] / afs[:,:,2]) / (c[:,:,1] / c[:,:,2])  # green / blue ratio
+	rbratio = (afs[:,:,0] / afs[:,:,2]) / (c[:,:,0] / c[:,:,2])  # red   / blue ratio
+
+	zmin = 0.2
+	zmax = 1.0   # note: numbers >1 desaturate.
+	
+	grratio[ grratio < zmin ] = zmin
+	grratio[ grratio > zmax ] = zmax
+
+	brratio[ brratio < zmin ] = zmin
+	brratio[ brratio > zmax ] = zmax
+
+	rgratio[ rgratio < zmin ] = zmin
+	rgratio[ rgratio > zmax ] = zmax
+
+	bgratio[ bgratio < zmin ] = zmin
+	bgratio[ bgratio > zmax ] = zmax
+
+	gbratio[ gbratio < zmin ] = zmin
+	gbratio[ gbratio > zmax ] = zmax
+
+	rbratio[ rbratio < zmin ] = zmin
+	rbratio[ rbratio > zmax ] = zmax
+	
+	cavgn = np.sum(c, axis=2) / c.shape[2]    # note this is 0 to 65535 scale
+	
+	cavgn = cavgn / 65535.0             # note: this image is a normalized 0 to 1.0 scale. floating point
+	
+	cavgn[ cavgn < 0.0 ] = 0.0
+	
+	cavgn /= np.max(cavgn)
+	
+	cavgn = cavgn ** 0.2
+	
+	cavgn = (cavgn +0.3) / (1.0 + 0.3)  # prevent low level from copmpletely being lost
+
+	cfactor = 1.2
+	
+	cfe = cfactor * args.colorenhance * cavgn
+	
+	grratio = 1.0 + (cfe * (grratio - 1.0))
+	brratio = 1.0 + (cfe * (brratio - 1.0))
+	rgratio = 1.0 + (cfe * (rgratio - 1.0))
+	bgratio = 1.0 + (cfe * (bgratio - 1.0))
+	gbratio = 1.0 + (cfe * (gbratio - 1.0))
+	rbratio = 1.0 + (cfe * (rbratio - 1.0))
+	
+	grratio = 1.0 + (cfe * (grratio - 1.0))
+	brratio = 1.0 + (cfe * (brratio - 1.0))
+	rgratio = 1.0 + (cfe * (rgratio - 1.0))
+	bgratio = 1.0 + (cfe * (bgratio - 1.0))
+	gbratio = 1.0 + (cfe * (gbratio - 1.0))
+	rbratio = 1.0 + (cfe * (rbratio - 1.0))
+	
+	c2gr = c[:,:,2] * grratio  # green adjusted
+	c3br = c[:,:,3] * brratio  # blue adjusted
+
+	c1rg = c[:,:,1] * rgratio  # red adjusted
+	c3bg = c[:,:,3] * bgratio  # blue adjusted
+
+	c1rb = c[:,:,1] * rbratio  # red adjusted
+	c2gb = c[:,:,2] * gbratio  # green adjusted
+	
+	max_chan_idx = np.argmax(c, axis=2)
+	
+	(a, b) = np.where(max_chan_idx == 0)
+	c[a,b,np.ones(len(a),1)*1] = c2gr[a,b]  # green adjusted
+	c[a,b,np.ones(len(a),1)*2] = c3br[a,b]  # blue adjusted
+	
+	(a, b) = np.where(max_chan_idx == 1)
+	c[a,b,np.ones(len(a),1)*0] = c1rg[a,b]  # green adjusted
+	c[a,b,np.ones(len(a),1)*2] = c3bg[a,b]  # blue adjusted
+	
+	(a, b) = np.where(max_chan_idx == 2)
+	c[a,b,np.ones(len(a),1)*0] = c1rb[a,b]  # green adjusted
+	c[a,b,np.ones(len(a),1)*1] = c2gb[a,b]  # blue adjusted
+	
+	return c
+
 	
 def main():
 	parser = create_parser()
@@ -235,6 +329,11 @@ def main():
 		c = subtract_sky(im, 2, args)
 	if args.setmin is not None:
 		c = set_min(c, args.setmin)
+	if args.colorcorrect:
+		c = color_correct(c, args)
+	if args.setmin is not None:
+		c = set_min(c, args.setmin)
+	c = subtract_sky(im, 1, args)
 	
 	
 	
