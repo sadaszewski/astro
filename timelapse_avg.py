@@ -15,7 +15,7 @@ def create_parser():
     parser.add_argument('dname', type=str)
     parser.add_argument('first', type=int)
     parser.add_argument('last', type=int)
-    parser.add_argument('--ext', type=str, default='jpg')
+    parser.add_argument('--ext', type=str, default='JPG')
     return parser
 
 
@@ -28,7 +28,7 @@ def main():
     model_name = os.path.split(fnames[0])[1]
     print 'Sample matching file name:', model_name
     model_name = os.path.splitext(model_name)[0]
-    m = re.match('([a-zA-Z]*)([0-9]*)([a-zA-Z]*)', model_name)
+    m = re.match('([a-zA-Z_]*)([0-9]*)([a-zA-Z_]*)', model_name)
     prefix = m.group(1)
     padding = len(m.group(2))
     suffix = m.group(3)
