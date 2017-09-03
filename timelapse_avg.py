@@ -56,6 +56,7 @@ def main():
     res_fname = res_fmt % (args.first, args.last)
     print 'res_fname:', res_fname
     res_im.save(res_fname)
+    print 'Done.'
 
 
 if __name__ == '__main__':
