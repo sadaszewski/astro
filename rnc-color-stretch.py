@@ -9,6 +9,7 @@
 from argparse import ArgumentParser
 from PIL import Image
 import numpy as np
+import os
 
 
 def create_parser():
@@ -18,7 +19,7 @@ def create_parser():
 	parser.add_argument('--rootiter', type=int, default=1)
 	parser.add_argument('--rootpower2', type=float, default=1.0)
 	parser.add_argument('--pcntclip', type=float, default=0.005)
-	parser.add_argument('--nocolorcorrect', action='store_false')
+	parser.add_argument('--nocolorcorrect', action='store_true')
 	parser.add_argument('--colorenhance', type=float, default=1.0)
 	parser.add_argument('--tonecurve', action='store_true')
 	parser.add_argument('--cumstretch', action='store_true')
@@ -37,6 +38,29 @@ def create_parser():
 	return parser
 	
 	
+def tone_curve(im):
+	af = np.array(im)
+
+	#         af*b*(1/d)^((af/c)^0.4)
+	# print("applying tone curve...")
+	b=12.0
+	c=65535.0
+	d=12.0
+	af=af*b*((1.0/d)**((af/c)**0.4))
+
+	# a = format(af, format=int)    # 32-bit integer
+
+	# amomred = moment(a[,,1])
+	# amomgreen = moment(a[,,2])
+	# amomblue = moment(a[,,3])
+
+	# printf ("input image after application of tone curve:\n")
+	# printf("       RED:    min=%d    max=%d   mean=%d\n",  amomred[1,,],   amomred[2,,],   amomred[3,,])
+	# printf("       GREEN:  min=%d    max=%d   mean=%d\n",  amomgreen[1,,], amomgreen[2,,], amomgreen[3,,])
+	# printf("       BLUE:   min=%d    max=%d   mean=%d\n",  amomblue[1,,],  amomblue[2,,],  amomblue[3,,])
+	return af
+	
+	
 def find_clip_lvls(ahist, npixm):
 	alow = np.zeros(ahist.shape[0])
 	
@@ -51,12 +75,27 @@ def find_clip_lvls(ahist, npixm):
 			alow[i] = idx[0]
 	
 	return alow
+	
+	
+def moving_avg(h, ism):
+	res = np.zeros(h.shape, dtype=h.dtype)
+	for ih in range(0, 65536):
+		ilow = ih - ism
+		if ilow < 0: ilow = 0
+		ihigh = ih + ism
+		if ihigh > 65535: ihigh = 65535
+		res[ih] = np.mean(h[ilow:ihigh+1])
+	return res
 
 
 def subtract_sky(im, npass, args):
 
 	skylevelfactor = args.skylevelfactor
 	zerosky = args.zerosky
+	
+	print('skylevelfactor:', skylevelfactor)
+	print('zerosky:', zerosky)
+	print('npass:', npass)
 
 	c = np.array(im)
 	
@@ -70,21 +109,32 @@ def subtract_sky(im, npass, args):
 		ism = 300
 		
 		for i in range(c.shape[2]):
-			chistsm[:, i] = np.convolve(chist[:, i], np.ones(ism)/ism, mode='same')
+			chistsm[:, i] = moving_avg(chist[:, i], ism) # np.convolve(chist[:, i], np.ones(ism)/ism, mode='same')
 			
 		chistargmax = np.argmax(chistsm, axis=0)
 		chistmax = np.max(chistsm, axis=0)
+		# print('#1 chistargmax:', chistargmax, 'chistmax:', chistmax)
 		chistmax[chistargmax < 400] = chistsm[400, chistargmax < 400]
+		# print('#2 chistargmax:', chistargmax, 'chistmax:', chistmax)
 		chistargmax[chistargmax < 400] = 400
 		chistmax[chistargmax > 65500] = chistsm[65500, chistargmax > 65500]
 		chistargmax[chistargmax > 65500] = 65500
 		
+		# if np.any(chistargmax == 0):
+			# print('Cannot detect sky level. Fail!')
+			# raise ArgumentException('Cannot detect sky level')
 		
 		chistsky = chistmax * skylevelfactor
 		
 		chistskydn = np.zeros(c.shape[2])
 		for i in range(c.shape[2]):
 			chistskydn[i] = np.where(chistsm[:, i] > chistsky[i])[0][-1]
+			
+		if np.any(chistskydn == 0):
+			print('Cannot detect sky level. Fail!')
+			raise ArgumentException('Cannot detect sky level')
+			
+		print('chistskydn:', chistskydn)
 		
 		pskylevelfactor = skylevelfactor * 100.0
 		
@@ -101,11 +151,15 @@ def subtract_sky(im, npass, args):
 
 
 def root_stretch(im, args):
-	x = 1.0 / rootpower
-	
 	rootpower = args.rootpower
-	rootpower2 = args.rootpower2
+	rootpower2 = args.rootpower2 if args.rootpower2 > 1.0 else rootpower
 	rootiter = args.rootiter
+	
+	print('rootpower:', rootpower, 'rootpower2:', rootpower2)
+	print('rootiter:', rootiter)
+	
+	x = 1.0 / rootpower
+	print('x:', x)
 	
 	c = np.array(im).astype(np.float64)
 	
@@ -121,7 +175,8 @@ def root_stretch(im, args):
 		
 		bmin = np.min(b)
 		bminz = bmin - 4096.0
-		if (bminz < 0.0) bminz = 0.0
+		if bminz < 0.0:
+			bminz = 0.0
 		
 		b = (b - bminz)
 		b = b / (65535.0 - bminz)
@@ -134,11 +189,19 @@ def root_stretch(im, args):
 		else:
 			ispassmax = 2
 		
+		# args_1 = lambda: 0
+		# args_1.skylevelfactor = 0.06
+		# args_1.zerosky = args.zerosky
+		# args_1.rootpower2 = rootpower2
 		c = subtract_sky(c, ispassmax, args)
+		
+	return c
 
 
 # sc = (xfactor / (1 + exp(-1 * ((float(c)/65535.0 - xoffset) * xfactor) ))-(1- xoffset))/scurvemax
 def s_curve(im, nscurve):
+	print('nscurve:', nscurve)
+
 	xfactors = [5.0, 3.0, 5.0, 3.0, 5.0]
 	xoffsets = [0.42, 0.22, 0.42, 0.22, 0.42]
 	
@@ -152,8 +215,8 @@ def s_curve(im, nscurve):
 			xfactor = xfactors[i]
 			xoffset = xoffsets[i]
 	
-		scurvemin =  (xfactor / (1.0 + exp(-1.0 * ((0.0/65535.0 - xoffset) * xfactor) ))-(1.0- xoffset))
-		scurvemax =  (xfactor / (1.0 + exp(-1.0 * ((65535.0/65535.0 - xoffset) * xfactor) ))-(1.0- xoffset))
+		scurvemin =  (xfactor / (1.0 + np.exp(-1.0 * ((0.0/65535.0 - xoffset) * xfactor) ))-(1.0- xoffset))
+		scurvemax =  (xfactor / (1.0 + np.exp(-1.0 * ((65535.0/65535.0 - xoffset) * xfactor) ))-(1.0- xoffset))
 		scurveminsc = scurvemin / scurvemax
 		
 		xo = (1.0 - xoffset)
@@ -181,13 +244,15 @@ def s_curve(im, nscurve):
 	return c
 	
 	
-def set_min(im, minval):
+def set_min(orig_im, im, minval):
+	af = np.array(im)
 	c = np.array(im)
 	zx = 0.2  # keep some of the low level, which is noise, so it looks more natural.
 	
 	for i in range(3):
 		(a, b) = np.where(c[:, :, i] < minval[i])
-		c[a, b, np.ones(len(a), 1) * i] = minval[i] + zx * c[a, b, np.ones(len(a), 1) * i]
+		for k in range(len(a)):
+			c[a[k], b[k], i] = minval[i] + zx * af[a[k], b[k], i]
 
 	return c
 
@@ -195,6 +260,9 @@ def set_min(im, minval):
 def color_correct(orig_im, im, args):
 	af = np.array(orig_im).astype(np.float64)
 	c = np.array(im).astype(np.float64)
+	
+	print('af.shape:', af.shape)
+	print('c.shape:', c.shape)
 	
 	afs = af - args.zerosky
 	afs[afs < 10] = 10
@@ -253,37 +321,49 @@ def color_correct(orig_im, im, args):
 	gbratio = 1.0 + (cfe * (gbratio - 1.0))
 	rbratio = 1.0 + (cfe * (rbratio - 1.0))
 	
-	grratio = 1.0 + (cfe * (grratio - 1.0))
-	brratio = 1.0 + (cfe * (brratio - 1.0))
-	rgratio = 1.0 + (cfe * (rgratio - 1.0))
-	bgratio = 1.0 + (cfe * (bgratio - 1.0))
-	gbratio = 1.0 + (cfe * (gbratio - 1.0))
-	rbratio = 1.0 + (cfe * (rbratio - 1.0))
-	
-	c2gr = c[:,:,2] * grratio  # green adjusted
-	c3br = c[:,:,3] * brratio  # blue adjusted
+	c2gr = c[:,:,1] * grratio  # green adjusted
+	c3br = c[:,:,2] * brratio  # blue adjusted
 
-	c1rg = c[:,:,1] * rgratio  # red adjusted
-	c3bg = c[:,:,3] * bgratio  # blue adjusted
+	c1rg = c[:,:,0] * rgratio  # red adjusted
+	c3bg = c[:,:,2] * bgratio  # blue adjusted
 
-	c1rb = c[:,:,1] * rbratio  # red adjusted
-	c2gb = c[:,:,2] * gbratio  # green adjusted
+	c1rb = c[:,:,0] * rbratio  # red adjusted
+	c2gb = c[:,:,1] * gbratio  # green adjusted
 	
 	max_chan_idx = np.argmax(c, axis=2)
 	
 	(a, b) = np.where(max_chan_idx == 0)
-	c[a,b,np.ones(len(a),1)*1] = c2gr[a,b]  # green adjusted
-	c[a,b,np.ones(len(a),1)*2] = c3br[a,b]  # blue adjusted
+	print('len(a):', len(a), 'len(b):', len(b))
+	for i in range(len(a)):
+		c[a[i],b[i],1] = c2gr[a[i],b[i]]  # green adjusted
+		c[a[i],b[i],2] = c3br[a[i],b[i]]  # blue adjusted
 	
 	(a, b) = np.where(max_chan_idx == 1)
-	c[a,b,np.ones(len(a),1)*0] = c1rg[a,b]  # green adjusted
-	c[a,b,np.ones(len(a),1)*2] = c3bg[a,b]  # blue adjusted
+	print('len(a):', len(a), 'len(b):', len(b))
+	for i in range(len(a)):
+		c[a[i],b[i],0] = c1rg[a[i],b[i]]  # green adjusted
+		c[a[i],b[i],2] = c3bg[a[i],b[i]]  # blue adjusted
 	
 	(a, b) = np.where(max_chan_idx == 2)
-	c[a,b,np.ones(len(a),1)*0] = c1rb[a,b]  # green adjusted
-	c[a,b,np.ones(len(a),1)*1] = c2gb[a,b]  # blue adjusted
+	print('len(a):', len(a), 'len(b):', len(b))
+	for i in range(len(a)):
+		c[a[i],b[i],0] = c1rb[a[i],b[i]]  # green adjusted
+		c[a[i],b[i],1] = c2gb[a[i],b[i]]  # blue adjusted
 	
 	return c
+	
+	
+def save_result(c, suffix, args):
+	# cmin = np.min(c)
+	# cmax = np.max(c)
+	c = c.astype(np.float64) * 255 / 65535 # (cmax - cmin)
+	
+	print('Saving result...')
+	(dname, fname) = os.path.split(args.imfile)
+	(fname, ext) = os.path.splitext(fname)
+	outname = '%s_%s.png' % (fname, suffix)
+	print('outname:', outname)
+	Image.fromarray(c.astype(np.uint8)).save(outname)
 
 	
 def main():
@@ -303,7 +383,14 @@ def main():
 	im[:, :, 1] = im_1
 	im[:, :, 2] = im_2
 	print('im.shape:', im.shape, 'im.dtype:', im.dtype)
-	im_flat = np.reshape(im, (im.shape[0] * im.shape[1], im.shape[2]))
+	
+	cmin = np.min(im)
+	cmax = np.max(im)
+	print('cmin:', cmin, 'cmax:', cmax)
+	# im = 100 + (im.astype(np.float64) - cmin) * 65000 / cmax
+	# im = im.astype(np.uint16)
+	
+	im_flat = np.ravel(im) # np.reshape(im, (im.shape[0] * im.shape[1], im.shape[2]))
 	mom = np.vstack((np.min(im_flat, axis=0), np.max(im_flat, axis=0), np.mean(im_flat, axis=0))).T
 	print('mom:', mom)
 	ahist = np.zeros((3, 65536), dtype=np.float64)
@@ -316,25 +403,50 @@ def main():
 	npixm = int(npix * args.pcntclip/100.0)
 	print('npixm:', npixm)
 	
-	find_clip_lvls(ahist, npixm)
+	# using c from now on
+	c = im
 	
-	c = subtract_sky(im, 2, args)
+	# find_clip_lvls(ahist, npixm)
+	if args.tonecurve:
+		print('---> Applying tone curve...')
+		c = tone_curve(im)
+		save_result(c, 'tone_curve', args)
+	
+	print('---> First sky-subtract...')
+	c = subtract_sky(c, 2, args)
 	Image.fromarray(c[:,:,0]).save('find_sky_level_r.tif')
 	Image.fromarray(c[:,:,1]).save('find_sky_level_g.tif')
 	Image.fromarray(c[:,:,2]).save('find_sky_level_b.tif')
+	save_result(c, '1st_sky_sub', args)
 	
-	c = root_stretch(c, args)
-	c = s_curve(c, args.scurve)
+	if args.rootiter > 0:
+		print('---> Root stretching...')
+		c = root_stretch(c, args)
+		save_result(c, 'rs', args)
 	if args.scurve > 0:
-		c = subtract_sky(im, 2, args)
+		print('---> S-Curve...')
+		c = s_curve(c, args.scurve)
+		print('---> Subtracting sky after S-Curve...')
+		c = subtract_sky(c, 2, args)
 	if args.setmin is not None:
-		c = set_min(c, args.setmin)
-	if args.colorcorrect:
-		c = color_correct(c, args)
+		print('---> Set-min...')
+		c = set_min(c, c, args.setmin)
+	if not args.nocolorcorrect:
+		print('---> Color correction...')
+		c = color_correct(im, c, args)
+		save_result(c, 'cc', args)
 	if args.setmin is not None:
-		c = set_min(c, args.setmin)
-	c = subtract_sky(im, 1, args)
+		print('---> Second Set-min...')
+		c = set_min(c, c, args.setmin)
+	print('---> Final sky-subtract...')
+	c = subtract_sky(c, 1, args)
 	
+	# print('Scaling to 8-bit...')
+	save_result(c, 'rnc', args)
+	
+	
+	
+	print('Done.')
 	
 	
 if __name__ == '__main__':
