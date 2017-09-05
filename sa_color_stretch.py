@@ -6,6 +6,10 @@
 # Roger N. Clark:
 # http://www.clarkvision.com/articles/astrophotography-rnc-color-stretch/
 #
+#
+# ./sa_color_stretch.py m8_copy.tif --rootpower 3 --skylevelfactor 0.15 \
+#    --scurve 1 --satrootpower 1.2 --satscurve 2 --setmin 12000
+# 
 
 from argparse import ArgumentParser
 from PIL import Image
@@ -215,6 +219,10 @@ def root_stretch(im, rootpower, mode='pipe'):
 			sum_ += 65535.0 * b		   # scale from a 0 to 1.0 range
 		else:
 			c = 65535.0 * b		   # scale from a 0 to 1.0 range
+			# args_1 = lambda: 0
+			# args_1.skylevelfactor = 0.5
+			# args_1.zerosky = 4000
+			# c = subtract_sky(c, 1, args_1)
 		
 	if mode == 'mean':
 		c = sum_ / len(rootpower)
@@ -323,19 +331,22 @@ def main():
 	npix = im.shape[0] * im.shape[1]
 	print('npix:', npix)
 	
+	c = im
+	if args.tonecurve:
+		print('---> Applying tone curve...')
+		c = tone_curve(c)
+		save_result(c, 'tone_curve', args)
+		print('c.shape:', c.shape)
+	
 	print('Converting RGB to HSV...')
-	hsv = rgb_to_hsv(im / 65535.0)
+	hsv = rgb_to_hsv(c / 65535.0)
 	
 	c = hsv[:, :, 2] * 65535 # work on value only
 	c = c[:, :, np.newaxis]
 	print('Working on value only...')
 	print('c.shape:', c.shape)
 	
-	if args.tonecurve:
-		print('---> Applying tone curve...')
-		c = tone_curve(im)
-		save_result(c, 'tone_curve', args)
-		print('c.shape:', c.shape)
+	
 	
 	print('---> First sky-subtract...')
 	c = subtract_sky(c, 2, args)
@@ -347,6 +358,12 @@ def main():
 		print('---> Root stretching...')
 		c = root_stretch(c, args.rootpower, 'pipe')
 		save_result(c, 'rs', args)
+		
+		
+	if args.scurve > 0:
+		print('---> S-Curve...')
+		c = s_curve(c, args.scurve)
+		save_result(c, 'sc', args)
 		
 	s = hsv[:, :, 1] * 65535
 	s = s[:, :, np.newaxis]
@@ -360,18 +377,22 @@ def main():
 	if args.setmin is not None:
 		print('---> Set-min...')
 		c = set_min(hsv[:, :, 2] * 65535, c, args.setmin)
-				
+	
+
+	print('Decrease brightness so that color is more visible')
+	c = (c/65535)*(1.0-(s/65535)**3)*65535
+	
 	print('Recomposing HSV...')
 	print('max(c):', np.max(c))
+	
 	if s is not None:
+		# s *= 4
+		# s[s > 65535] = 65535
 		hsv[:, :, 1] = np.squeeze(s) / 65535
 	hsv[:, :, 2] = np.squeeze(c) / 65535
 	c = hsv_to_rgb(hsv) * 65535
 	
-	if args.scurve > 0:
-		print('---> S-Curve on RGB...')
-		c = s_curve(c, args.scurve)
-		save_result(c, 'sc', args)
+
 		
 	print('---> Saving final result...')
 	save_result(c, 'sa', args)

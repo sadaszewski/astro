@@ -109,7 +109,8 @@ def subtract_sky(im, npass, args):
 		ism = 300
 		
 		for i in range(c.shape[2]):
-			chistsm[:, i] = moving_avg(chist[:, i], ism) # np.convolve(chist[:, i], np.ones(ism)/ism, mode='same')
+			# chistsm[:, i] = moving_avg(chist[:, i], ism)
+			chistsm[:, i] = np.convolve(chist[:, i], np.ones(ism)/ism, mode='same')
 			
 		chistargmax = np.argmax(chistsm, axis=0)
 		chistmax = np.max(chistsm, axis=0)
