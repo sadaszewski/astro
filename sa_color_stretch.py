@@ -379,8 +379,8 @@ def main():
 		c = set_min(hsv[:, :, 2] * 65535, c, args.setmin)
 	
 
-	print('Decrease brightness so that color is more visible')
-	c = (c/65535)*(1.0-(s/65535)**3)*65535
+	# print('Decrease brightness so that color is more visible')
+	# c = (c/65535)*(1.0-(s/65535)**3)*65535
 	
 	print('Recomposing HSV...')
 	print('max(c):', np.max(c))
